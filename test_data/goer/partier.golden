@@ -1,0 +1,75 @@
+package goer
+
+import (
+	"marwan.io/impl/test_data/crowd"
+	"marwan.io/impl/test_data/models"
+	"marwan.io/impl/test_data/partier"
+)
+
+// Goer is someone who goes to parties
+type Goer struct {
+	closer
+	Name string
+}
+
+type closer struct{}
+
+func (c *closer) Close() error {
+	return nil
+}
+
+// Read implements Partier
+func (*Goer) Read(p []byte) (n int, err error) {
+	panic("unimplemented")
+}
+
+// Sing implements Partier
+func (*Goer) Sing(c *crowd.Crowd) error {
+	panic("unimplemented")
+}
+
+// Write implements Partier
+func (*Goer) Write(p []byte) (n int, err error) {
+	panic("unimplemented")
+}
+
+// BrowsePartyThemes implements Partier
+func (*Goer) BrowsePartyThemes(themes map[models.Theme]struct{}) error {
+	panic("unimplemented")
+}
+
+// Drink implements Partier
+func (*Goer) Drink(models.Beverage) error {
+	panic("unimplemented")
+}
+
+// FavoritePerson implements Partier
+func (*Goer) FavoritePerson() *models.Person {
+	panic("unimplemented")
+}
+
+// Fight implements Partier
+func (*Goer) Fight(reason string) []*partier.Problem {
+	panic("unimplemented")
+}
+
+// GoWith implements Partier
+func (*Goer) GoWith(p *models.Person) (err error) {
+	panic("unimplemented")
+}
+
+// Hammered implements Partier
+func (*Goer) Hammered(interface {
+	DrinkMore(interface {
+		partier.
+			Singer
+		Fight(reason string) []*partier.Problem
+	}) partier.Partier
+}) partier.Partier {
+	panic("unimplemented")
+}
+
+// SendBeverage implements Partier
+func (*Goer) SendBeverage(chan models.Beverage) {
+	panic("unimplemented")
+}
