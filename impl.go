@@ -7,6 +7,7 @@ import (
 	"go/format"
 	"go/token"
 	"go/types"
+	"strconv"
 	"strings"
 	"text/template"
 
@@ -17,11 +18,19 @@ import (
 // Implementation defines the results of
 // the implement method
 type Implementation struct {
-	File        string   // path to the Go file of the implementing type
-	FileContent []byte   // the Go file plus the method implementations at the bottom of the file
-	Methods     []byte   // only the method implementations, helpful if you want to insert the methods elsewhere in the file
-	Imports     []string // all the required imports for the methods, it does not filter out imports already imported by the file
-	Error       error    // any error encountered during the process
+	File         string         // path to the Go file of the implementing type
+	FileContent  []byte         // the Go file plus the method implementations at the bottom of the file
+	Methods      []byte         // only the method implementations, helpful if you want to insert the methods elsewhere in the file
+	AddedImports []*AddedImport // all the required imports for the methods, it does not filter out imports already imported by the file
+	AllImports   []*AddedImport // convenience to get a list of all the imports of the concrete type file
+	Error        error          // any error encountered during the process
+}
+
+// AddedImport represents a newly added import
+// statement to the concrete type. If name is not
+// empty, then that import is required to have that name.
+type AddedImport struct {
+	Name, Path string
 }
 
 // Implement an interface and return the path to as well as the content of the
@@ -41,9 +50,11 @@ func Implement(ifacePath, iface, implPath, impl string) (*Implementation, error)
 	}
 	implFilename, implFileAST := getFile(implPkg, implObj)
 	ct := &concreteType{
-		pkg: implPkg.Types,
-		tms: types.NewMethodSet(implObj.Type()),
-		pms: types.NewMethodSet(types.NewPointer(implObj.Type())),
+		pkg:  implPkg.Types,
+		fset: implPkg.Fset,
+		file: implFileAST,
+		tms:  types.NewMethodSet(implObj.Type()),
+		pms:  types.NewMethodSet(types.NewPointer(implObj.Type())),
 	}
 	missing, err := missingMethods(ct, ifaceObj, ifacePkg, map[string]struct{}{})
 	if err != nil {
@@ -52,12 +63,11 @@ func Implement(ifacePath, iface, implPath, impl string) (*Implementation, error)
 	if len(missing) == 0 {
 		return nil, nil
 	}
-	allImports := []string{}
 	var methodsBuffer bytes.Buffer
 	for _, mm := range missing {
-		imports := getInterfaceImports(mm.missing)
-		allImports = append(allImports, imports...)
-		addPathsToImplFile(implPkg.Fset, implFileAST, implPath, imports)
+		// imports := getInterfaceImports(mm.missing)
+		// allImports = append(allImports, imports...)
+		// addPathsToImplFile(implPkg.Fset, implFileAST, implPath, imports)
 		t := template.Must(template.New("").Parse(tmpl))
 		for _, m := range mm.missing {
 			var sig bytes.Buffer
@@ -67,11 +77,13 @@ func Implement(ifacePath, iface, implPath, impl string) (*Implementation, error)
 			n = astutil.Apply(n, func(c *astutil.Cursor) bool {
 				sel, ok := c.Node().(*ast.SelectorExpr)
 				if ok {
-					return applySelector(c, sel, ifacePkg, implPath)
+					renamed := mightRenameSelector(c, sel, ifacePkg, ct)
+					removed := mightRemoveSelector(c, sel, ifacePkg, implPath)
+					return removed || renamed
 				}
 				ident, ok := c.Node().(*ast.Ident)
 				if ok {
-					return applyIdentifier(c, ident, ifacePkg, implPath)
+					return mightAddSelector(c, ident, ifacePkg, ct)
 				}
 				return true
 			}, nil)
@@ -96,55 +108,128 @@ func Implement(ifacePath, iface, implPath, impl string) (*Implementation, error)
 	format.Node(&buf, implPkg.Fset, implFileAST)
 	buf.Write(methodsBuffer.Bytes())
 	source, err := format.Source(buf.Bytes())
+	allImports := []*AddedImport{}
+	for _, imp := range implFileAST.Imports {
+		ai := &AddedImport{"", imp.Path.Value}
+		if imp.Name != nil {
+			ai.Name = imp.Name.Name
+		}
+		allImports = append(allImports, ai)
+	}
 	return &Implementation{
-		File:        implFilename,
-		FileContent: source,
-		Methods:     methodsBuffer.Bytes(),
-		Error:       err,
-		Imports:     unique(allImports),
+		File:         implFilename,
+		FileContent:  source,
+		Methods:      methodsBuffer.Bytes(),
+		Error:        err,
+		AddedImports: ct.addedImports,
+		AllImports:   allImports,
 	}, err
 }
 
-func applySelector(c *astutil.Cursor, sel *ast.SelectorExpr, ifacePkg *packages.Package, implPath string) bool {
-	x, ok := sel.X.(*ast.Ident)
-	if !ok {
-		return false
-	}
-	obj := ifacePkg.TypesInfo.Uses[x]
-	pkgName, ok := obj.(*types.PkgName)
-	if !ok {
-		return true
-	}
-	if pkgName.Imported().Path() == implPath {
+// mightRemoveSelector will replace a selector such as *models.User to just be *User.
+// This is needed if the interface method imports the same package where the concrete type
+// is going to implement that method
+func mightRemoveSelector(c *astutil.Cursor, sel *ast.SelectorExpr, ifacePkg *packages.Package, implPath string) bool {
+	obj := ifacePkg.TypesInfo.Uses[sel.Sel]
+	if obj.Pkg().Path() == implPath {
 		c.Replace(sel.Sel)
 		return false
 	}
 	return true
 }
 
-func applyIdentifier(c *astutil.Cursor, ident *ast.Ident, ifacePkg *packages.Package, implPath string) bool {
+// mightRenameSelector will take a selector such as *models.User and rename it to *somethingelse.User
+// if the target conrete type file already imports the "models" package but has renamed it.
+// If the concrete type does not have the import file, then the import file will be added along with its
+// rename if the interface file has defined one.
+func mightRenameSelector(c *astutil.Cursor, sel *ast.SelectorExpr, ifacePkg *packages.Package, ct *concreteType) bool {
+	ident, ok := sel.X.(*ast.Ident)
+	if !ok {
+		return true
+	}
 	obj := ifacePkg.TypesInfo.Uses[ident]
 	if obj == nil {
 		return true
 	}
-	nn := getNamed(obj.Type())
-	if len(nn) == 0 {
+	pn, ok := obj.(*types.PkgName)
+	if !ok {
 		return true
 	}
-	n := nn[0]
+	pkg := pn.Imported()
+	var hasImport bool
+	var importName string
+	for _, imp := range ct.file.Imports {
+		impPath, _ := strconv.Unquote(imp.Path.Value)
+		if impPath == pkg.Path() {
+			hasImport = true
+			importName = pkg.Name()
+			if imp.Name != nil && imp.Name.Name != pkg.Name() {
+				importName = imp.Name.Name
+			}
+			break
+		}
+	}
+	if hasImport {
+		ident.Name = importName
+		c.Replace(sel)
+		return false
+	}
+	if pkg.Path() == ct.pkg.Path() {
+		return true
+	}
+	if pn.Name() != pkg.Name() {
+		importName = pn.Name()
+	}
+	ct.addImport(importName, pkg.Path())
+	return false
+}
+
+// mightAddSelector takes an identifier such as "User" and might turn into a selector
+// such as "models.User". This is needed when an interface method references
+// a type declaration in its own package while the concrete type is in a different package.
+// If an import already exists, it will use that import's name. If it does not exist,
+// it will add it to the ct's *ast.File.
+func mightAddSelector(
+	c *astutil.Cursor,
+	ident *ast.Ident,
+	ifacePkg *packages.Package,
+	ct *concreteType,
+) bool {
+	obj := ifacePkg.TypesInfo.Uses[ident]
+	if obj == nil {
+		return true
+	}
+	n, ok := obj.Type().(*types.Named)
+	if !ok {
+		return true
+	}
 	pkg := n.Obj().Pkg()
 	if pkg == nil {
 		return true
 	}
-	if pkg.Path() == ifacePkg.Types.Path() && pkg.Path() != implPath {
+	if pkg.Path() == ifacePkg.Types.Path() && pkg.Path() != ct.pkg.Path() {
+		pkgName := pkg.Name()
+		missingImport := true
+		for _, imp := range ct.file.Imports {
+			impPath, _ := strconv.Unquote(imp.Path.Value)
+			if pkg.Path() == impPath {
+				missingImport = false
+				if imp.Name != nil {
+					pkgName = imp.Name.Name
+				}
+				break
+			}
+		}
+		if missingImport {
+			ct.addImport("", pkg.Path())
+		}
 		c.Replace(&ast.SelectorExpr{
-			X:   &ast.Ident{Name: obj.Pkg().Name()},
+			X:   &ast.Ident{Name: pkgName},
 			Sel: ident,
 		})
 		return false
 	}
 	return true
-
 }
 
 type methodData struct {
@@ -159,73 +244,6 @@ func (*{{ .Implementer }}) {{ .Name }}{{ .Signature }} {
 	panic("unimplemented")
 }
 `
-
-func addPathsToImplFile(fset *token.FileSet, f *ast.File, path string, paths []string) {
-	for _, p := range paths {
-		if p == path {
-			continue
-		}
-		astutil.AddImport(fset, f, p)
-	}
-}
-
-// getInterfaceImports returns all the imports
-// that are required within a set of function signatures
-func getInterfaceImports(funcs []*types.Func) []string {
-	imps := []string{}
-	for _, f := range funcs {
-		imps = append(imps, getSignatureImports(f.Type().(*types.Signature))...)
-	}
-	return unique(imps)
-}
-
-func getSignatureImports(sig *types.Signature) []string {
-	imps := []string{}
-	imps = append(imps, getParamsImports(sig.Params())...)
-	imps = append(imps, getParamsImports(sig.Results())...)
-	return imps
-}
-
-func getParamsImports(t *types.Tuple) []string {
-	imps := []string{}
-	for i := 0; i < t.Len(); i++ {
-		imps = append(imps, getParamImports(t.At(i))...)
-	}
-	return imps
-}
-
-func getParamImports(v *types.Var) []string {
-	imps := []string{}
-	nn := getNamed(v.Type())
-	for _, named := range nn {
-		pkg := named.Obj().Pkg()
-		if pkg != nil {
-			imps = append(imps, pkg.Path())
-		}
-	}
-	return imps
-}
-
-func getNamed(t types.Type) []*types.Named {
-	switch t := t.(type) {
-	case *types.Named:
-		return []*types.Named{t}
-	case *types.Slice:
-		return getNamed(t.Elem())
-	case *types.Array:
-		return getNamed(t.Elem())
-	case *types.Chan:
-		return getNamed(t.Elem())
-	case *types.Map:
-		nn := []*types.Named{}
-		nn = append(nn, getNamed(t.Key())...)
-		nn = append(nn, getNamed(t.Elem())...)
-		return nn
-	case *types.Pointer:
-		return getNamed(t.Elem())
-	}
-	return nil
-}
 
 func loadPackages(ifacePath, implPath string) (ifacePkg *packages.Package, implPkg *packages.Package, err error) {
 	var cfg packages.Config
@@ -271,8 +289,11 @@ type missingInterface struct {
 // concreteType is the destination type
 // that will implement the interface methods
 type concreteType struct {
-	pkg      *types.Package
-	tms, pms *types.MethodSet
+	pkg          *types.Package
+	fset         *token.FileSet
+	file         *ast.File
+	tms, pms     *types.MethodSet
+	addedImports []*AddedImport
 }
 
 func (ct *concreteType) doesNotHaveMethod(name string) bool {
@@ -284,6 +305,11 @@ func (ct *concreteType) getMethodSelection(name string) *types.Selection {
 		return sel
 	}
 	return ct.pms.Lookup(ct.pkg, name)
+}
+
+func (ct *concreteType) addImport(name, path string) {
+	astutil.AddNamedImport(ct.fset, ct.file, name, path)
+	ct.addedImports = append(ct.addedImports, &AddedImport{name, path})
 }
 
 /*
@@ -415,16 +441,4 @@ func getFile(pkg *packages.Package, obj types.Object) (string, *ast.File) {
 		}
 	}
 	return "", nil
-}
-
-func unique(ss []string) []string {
-	res := make([]string, 0, len(ss))
-	mp := map[string]struct{}{}
-	for _, s := range ss {
-		if _, ok := mp[s]; !ok {
-			mp[s] = struct{}{}
-			res = append(res, s)
-		}
-	}
-	return res
 }

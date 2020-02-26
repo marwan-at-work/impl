@@ -39,9 +39,12 @@ For other options such as json output for tooling, see `impl --help`.
 ```golang
 import "marwan.io/impl"
 
-file, fileContent, err := impl.Implement("io", "Writer", "github.com/my/pkg", "MyType")
-// file is the file where MyType was defined
-// fileContent is the new content of the entire file that has the Writer method
+resp, err := impl.Implement("io", "Writer", "github.com/my/pkg", "MyType")
+// resp.File is the file where MyType was defined
+// resp.FileContent is the new content of the entire file that has the Writer method
+// resp.Methods is the Go code of all the newly add methods
+// resp.AddedImports denotes all new import statements to the concrete type file
+// resp.AllImports denotes all import paths of that same file.
 // err must be handled
 ```
 
