@@ -1,3 +1,5 @@
+// Package impl can generate method stubs to implement a given interface
+// For usage and installation, see README file
 package impl
 
 import (
