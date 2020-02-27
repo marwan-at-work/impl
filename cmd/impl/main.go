@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"os"
+	"os/exec"
 	"strings"
 
 	"marwan.io/impl"
@@ -14,6 +16,8 @@ import (
 const usage = `impl generates interface method stubs for a defined type
 Usage:
 	impl -iface=path.to/my/pkg.MyInterface -impl=path.to/my/pkg.MyTime
+	impl list # lists all available interfaces to implement
+	impl list -path=io.Writer # list all available interfaces within io.Writer and its dependencies
 `
 
 var (
@@ -21,6 +25,7 @@ var (
 	implArg  = flag.String("impl", "", "path to the implementation type: path.to/my/pkg.MyTime")
 	write    = flag.Bool("w", false, "rewrite the file instead of printing to stdout")
 	wantJSON = flag.Bool("json", false, "print response infromation in json format")
+	path     = flag.String("path", "the path where you want to list interfaces", "impl list -path=io.Writer")
 )
 
 func main() {
@@ -35,6 +40,38 @@ func main() {
 }
 
 func run() error {
+	args := flag.Args()
+	if len(args) > 0 {
+		switch args[0] {
+		case "list":
+			return list()
+		default:
+			return fmt.Errorf("unrecognized command: %v", args[0])
+		}
+	}
+	return implement()
+}
+
+func list() error {
+	path, err := getPath()
+	if err != nil {
+		return err
+	}
+	ifaces, err := impl.ListInterfaces(path)
+	if err != nil {
+		return err
+	}
+	if *wantJSON {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "\t")
+		enc.Encode(ifaces)
+		return nil
+	}
+	fmt.Printf("%s\n", strings.Join(ifaces, "\n"))
+	return nil
+}
+
+func implement() error {
 	ifaceArg := *ifaceArg
 	implArg := *implArg
 	idx := strings.LastIndex(ifaceArg, ".")
@@ -60,4 +97,29 @@ func run() error {
 	}
 	fmt.Printf("%s", impl.FileContent)
 	return nil
+}
+
+func getPath() (string, error) {
+	if *path != "" {
+		return *path, nil
+	}
+	bts, err := exec.Command("go", "list", "-json").Output()
+	if err != nil {
+		return "", fmt.Errorf("go list err: %v", err)
+	}
+	var resp struct {
+		ImportPath string
+		Module     struct {
+			Path string
+		}
+	}
+	err = json.Unmarshal(bts, &resp)
+	if err != nil {
+		return "", fmt.Errorf("json decode err: %v", err)
+	}
+	path := resp.Module.Path
+	if path == "" {
+		path = resp.ImportPath
+	}
+	return path, nil
 }

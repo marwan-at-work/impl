@@ -49,3 +49,14 @@ resp, err := impl.Implement("io", "Writer", "github.com/my/pkg", "MyType")
 // err must be handled
 ```
 
+### List Available Interfaces
+
+The library can list available interfaces given any import path
+
+```bash
+impl list -json
+["mypkg.MyInterface", "io.Writer", "io.Closer"] # etc
+
+impl list io -json
+# ...
+```

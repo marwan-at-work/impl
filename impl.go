@@ -128,6 +128,50 @@ func Implement(ifacePath, iface, implPath, impl string) (*Implementation, error)
 	}, err
 }
 
+// ListInterfaces ...
+func ListInterfaces(path string) ([]string, error) {
+	pkg, err := loadPackage(path)
+	if err != nil {
+		return nil, err
+	}
+	return listInterfaces(pkg, path, make(map[string]struct{}))
+}
+
+// listInterfaces
+func listInterfaces(pkg *packages.Package, path string, visited map[string]struct{}) ([]string, error) {
+	if _, ok := visited[path]; ok {
+		return []string{}, nil
+	}
+	visited[path] = struct{}{}
+	ifaces := []string{}
+	for _, n := range pkg.Types.Scope().Names() {
+		obj := pkg.Types.Scope().Lookup(n)
+		_, ok := obj.Type().Underlying().(*types.Interface)
+		if !ok {
+			continue
+		}
+		ifaces = append(ifaces, pkg.Types.Path()+"."+n)
+	}
+	for _, dep := range pkg.Imports {
+		depIfaces, err := listInterfaces(dep, dep.Types.Path(), visited)
+		if err != nil {
+			return nil, err
+		}
+		ifaces = append(ifaces, depIfaces...)
+	}
+	return ifaces, nil
+}
+
+func loadPackage(path string) (*packages.Package, error) {
+	var cfg packages.Config
+	cfg.Mode = packages.NeedTypes | packages.NeedImports | packages.NeedDeps
+	pkgs, err := packages.Load(&cfg, path)
+	if err != nil {
+		return nil, fmt.Errorf("error loading packages: %w", err)
+	}
+	return pkgs[0], nil
+}
+
 // mightRemoveSelector will replace a selector such as *models.User to just be *User.
 // This is needed if the interface method imports the same package where the concrete type
 // is going to implement that method
