@@ -27,7 +27,7 @@ As a library:
 
 Given a `type MyType struct {}` definition in github.com/my/pkg, you can run the following command:
 
-`impl -iface=io.Writer impl=github.com/my/pkg.MyType` 
+`impl -iface=io.Writer -impl=github.com/my/pkg.MyType` 
 
 And whichever file MyType is defined in will have `func (*MyType) Write(p []byte) (int, error) { panic("unimplemented) }` 
 
