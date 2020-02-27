@@ -1,0 +1,14 @@
+package underscore
+
+import (
+	"marwan.io/impl/test_data/models"
+	_ "marwan.io/impl/test_data/models"
+)
+
+// Underscore imports models twice
+type Underscore struct{}
+
+// Drink implements Interface
+func (*Underscore) Drink(models.Beverage) error {
+	panic("unimplemented")
+}

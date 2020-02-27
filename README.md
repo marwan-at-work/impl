@@ -11,6 +11,7 @@ A library and a command line that intelligently implements Go interfaces for any
 - [x] Adds "import" declarations to the file if any of the interface methods require it
 - [x] Recursively implement methods in embedded interfaces
 - [x] Adjusts the method function signature based on imports, such as replacing `*models.Person` with `*Person` if the target is in the "models" package already.
+- [x] Understands "." imports as well as "_" named imports
  
 ### Install
 

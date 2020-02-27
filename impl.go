@@ -135,7 +135,7 @@ func mightRemoveSelector(c *astutil.Cursor, sel *ast.SelectorExpr, ifacePkg *pac
 		c.Replace(sel.Sel)
 		return false
 	}
-	return true
+	return false
 }
 
 // mightRenameSelector will take a selector such as *models.User and rename it to *somethingelse.User
@@ -145,22 +145,22 @@ func mightRemoveSelector(c *astutil.Cursor, sel *ast.SelectorExpr, ifacePkg *pac
 func mightRenameSelector(c *astutil.Cursor, sel *ast.SelectorExpr, ifacePkg *packages.Package, ct *concreteType) bool {
 	ident, ok := sel.X.(*ast.Ident)
 	if !ok {
-		return true
+		return false
 	}
 	obj := ifacePkg.TypesInfo.Uses[ident]
 	if obj == nil {
-		return true
+		return false
 	}
 	pn, ok := obj.(*types.PkgName)
 	if !ok {
-		return true
+		return false
 	}
 	pkg := pn.Imported()
 	var hasImport bool
 	var importName string
 	for _, imp := range ct.file.Imports {
 		impPath, _ := strconv.Unquote(imp.Path.Value)
-		if impPath == pkg.Path() {
+		if impPath == pkg.Path() && !isIgnoredImport(imp) {
 			hasImport = true
 			importName = pkg.Name()
 			if imp.Name != nil && imp.Name.Name != pkg.Name() {
@@ -174,9 +174,14 @@ func mightRenameSelector(c *astutil.Cursor, sel *ast.SelectorExpr, ifacePkg *pac
 		c.Replace(sel)
 		return false
 	}
+	// there is no import, let's add a new one
 	if pkg.Path() == ct.pkg.Path() {
-		return true
+		// but not if we're importing the path to the concrete type
+		// in which case we're dropping this in mightRemoveSelector
+		return false
 	}
+	// if we're adding a new import to the concrete type file, and
+	// it has been renamed in the interface file, honor the rename.
 	if pn.Name() != pkg.Name() {
 		importName = pn.Name()
 	}
@@ -197,39 +202,44 @@ func mightAddSelector(
 ) bool {
 	obj := ifacePkg.TypesInfo.Uses[ident]
 	if obj == nil {
-		return true
+		return false
 	}
 	n, ok := obj.Type().(*types.Named)
 	if !ok {
-		return true
+		return false
 	}
 	pkg := n.Obj().Pkg()
 	if pkg == nil {
-		return true
+		return false
 	}
-	if pkg.Path() == ifacePkg.Types.Path() && pkg.Path() != ct.pkg.Path() {
-		pkgName := pkg.Name()
-		missingImport := true
-		for _, imp := range ct.file.Imports {
-			impPath, _ := strconv.Unquote(imp.Path.Value)
-			if pkg.Path() == impPath {
-				missingImport = false
-				if imp.Name != nil {
-					pkgName = imp.Name.Name
-				}
-				break
+	pkgName := pkg.Name()
+	missingImport := true
+	for _, imp := range ct.file.Imports {
+		impPath, _ := strconv.Unquote(imp.Path.Value)
+		if pkg.Path() == impPath && !isIgnoredImport(imp) {
+			missingImport = false
+			if imp.Name != nil {
+				pkgName = imp.Name.Name
 			}
+			break
 		}
-		if missingImport {
-			ct.addImport("", pkg.Path())
-		}
+	}
+	isNotImportingDestination := pkg.Path() != ct.pkg.Path()
+	if missingImport && isNotImportingDestination {
+		ct.addImport("", pkg.Path())
+	}
+	isLocalDeclaration := pkg.Path() == ifacePkg.Types.Path() && pkg.Path() != ct.pkg.Path()
+	isDotImport := pkg.Path() != ifacePkg.Types.Path() && pkg.Path() != ct.pkg.Path()
+	// the only reason we know it's a dotImport is because we never visit an Identifier
+	// that was part of a SelectorExpr.
+	if isLocalDeclaration || isDotImport {
 		c.Replace(&ast.SelectorExpr{
 			X:   &ast.Ident{Name: pkgName},
 			Sel: ident,
 		})
 		return false
 	}
-	return true
+	return false
 }
 
 type methodData struct {
@@ -441,4 +451,8 @@ func getFile(pkg *packages.Package, obj types.Object) (string, *ast.File) {
 		}
 	}
 	return "", nil
+}
+
+func isIgnoredImport(imp *ast.ImportSpec) bool {
+	return imp.Name != nil && (imp.Name.Name == "." || imp.Name.Name == "_")
 }

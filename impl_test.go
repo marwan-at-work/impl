@@ -54,6 +54,30 @@ var implementTests = []struct {
 		impl:       "Goer",
 		goldenFile: "test_data/goer/partier.golden",
 	},
+	{
+		name: "underscored imports",
+		description: `
+			If there's an underscore in the concrete type 
+			file, it must be ignored and re-imported if need be.
+		`,
+		ifacePath:  "marwan.io/impl/test_data/simple",
+		iface:      "Interface",
+		implPath:   "marwan.io/impl/test_data/underscore",
+		impl:       "Underscore",
+		goldenFile: "test_data/underscore/simple.golden",
+	},
+	{
+		name: "dot imports",
+		description: `
+			If there's a dot import being used in the interface,
+			make sure the concrete type adds it as a regular import.
+		`,
+		ifacePath:  "marwan.io/impl/test_data/dotter",
+		iface:      "Interface",
+		implPath:   "marwan.io/impl/test_data/underscore",
+		impl:       "Underscore",
+		goldenFile: "test_data/underscore/dotter.golden",
+	},
 }
 
 var u = flag.Bool("u", false, "override and update golden files")
