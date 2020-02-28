@@ -25,7 +25,7 @@ var (
 	implArg  = flag.String("impl", "", "path to the implementation type: path.to/my/pkg.MyTime")
 	write    = flag.Bool("w", false, "rewrite the file instead of printing to stdout")
 	wantJSON = flag.Bool("json", false, "print response infromation in json format")
-	path     = flag.String("path", "the path where you want to list interfaces", "impl list -path=io.Writer")
+	path     = flag.String("path", "", "the path where you want to list interfaces (i.e. impl list -path=io.Writer)")
 )
 
 func main() {
@@ -84,7 +84,7 @@ func implement() error {
 	if err != nil {
 		return err
 	}
-	if len(impl.FileContent) == 0 {
+	if impl == nil || len(impl.FileContent) == 0 {
 		return nil
 	}
 	if *write {
@@ -121,5 +121,5 @@ func getPath() (string, error) {
 	if path == "" {
 		path = resp.ImportPath
 	}
-	return path, nil
+	return path + "/...", nil
 }

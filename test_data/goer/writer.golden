@@ -6,13 +6,13 @@ type Goer struct {
 	Name string
 }
 
+// Write implements Writer
+func (*Goer) Write(p []byte) (n int, err error) {
+	panic("unimplemented")
+}
+
 type closer struct{}
 
 func (c *closer) Close() error {
 	return nil
-}
-
-// Write implements Writer
-func (*Goer) Write(p []byte) (n int, err error) {
-	panic("unimplemented")
 }

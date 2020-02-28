@@ -109,3 +109,12 @@ func TestImplement(t *testing.T) {
 		})
 	}
 }
+
+func BenchmarkImplementation(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		_, err := Implement("marwan.io/impl/test_data/partier", "Partier", "marwan.io/impl/test_data/goer", "Goer")
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}

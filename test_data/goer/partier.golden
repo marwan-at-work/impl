@@ -12,12 +12,6 @@ type Goer struct {
 	Name string
 }
 
-type closer struct{}
-
-func (c *closer) Close() error {
-	return nil
-}
-
 // Read implements Partier
 func (*Goer) Read(p []byte) (n int, err error) {
 	panic("unimplemented")
@@ -72,4 +66,10 @@ func (*Goer) Hammered(interface {
 // SendBeverage implements Partier
 func (*Goer) SendBeverage(chan models.Beverage) {
 	panic("unimplemented")
+}
+
+type closer struct{}
+
+func (c *closer) Close() error {
+	return nil
 }

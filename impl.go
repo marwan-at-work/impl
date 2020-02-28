@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"go/ast"
 	"go/format"
+	"go/parser"
 	"go/token"
 	"go/types"
+	"io/ioutil"
 	"strconv"
 	"strings"
 	"text/template"
@@ -106,10 +108,31 @@ func Implement(ifacePath, iface, implPath, impl string) (*Implementation, error)
 			methodsBuffer.WriteRune('\n')
 		}
 	}
+	nodes, _ := astutil.PathEnclosingInterval(implFileAST, implObj.Pos(), implObj.Pos())
+	insertPos := implPkg.Fset.Position(nodes[1].End()).Offset
+	implFileBts, err := ioutil.ReadFile(implFilename)
+	if err != nil {
+		return nil, err
+	}
 	var buf bytes.Buffer
-	format.Node(&buf, implPkg.Fset, implFileAST)
+	buf.Write(implFileBts[:insertPos])
+	buf.WriteByte('\n')
 	buf.Write(methodsBuffer.Bytes())
-	source, err := format.Source(buf.Bytes())
+	buf.Write(implFileBts[insertPos:])
+	fset := token.NewFileSet()
+
+	newF, err := parser.ParseFile(fset, implFilename, buf.Bytes(), parser.ParseComments)
+	if err != nil {
+		return nil, fmt.Errorf("could not reparse file: %w", err)
+	}
+	for _, imp := range ct.addedImports {
+		astutil.AddNamedImport(fset, newF, imp.Name, imp.Path)
+	}
+	var source bytes.Buffer
+	err = format.Node(&source, fset, newF)
+	if err != nil {
+		return nil, err
+	}
 	allImports := []*AddedImport{}
 	for _, imp := range implFileAST.Imports {
 		ai := &AddedImport{"", imp.Path.Value}
@@ -120,7 +143,7 @@ func Implement(ifacePath, iface, implPath, impl string) (*Implementation, error)
 	}
 	return &Implementation{
 		File:         implFilename,
-		FileContent:  source,
+		FileContent:  source.Bytes(),
 		Methods:      methodsBuffer.Bytes(),
 		Error:        err,
 		AddedImports: ct.addedImports,
@@ -130,30 +153,52 @@ func Implement(ifacePath, iface, implPath, impl string) (*Implementation, error)
 
 // ListInterfaces ...
 func ListInterfaces(path string) ([]string, error) {
-	pkg, err := loadPackage(path)
+	pkgs, err := loadPackage(path)
 	if err != nil {
 		return nil, err
 	}
-	return listInterfaces(pkg, path, make(map[string]struct{}))
+	mp := make(map[string]struct{})
+	ifaces := []string{}
+	for _, pkg := range pkgs {
+		newIfaces, err := listInterfaces(pkg, pkg.PkgPath, mp)
+		if err != nil {
+			return nil, err
+		}
+		ifaces = append(ifaces, newIfaces...)
+	}
+	return ifaces, nil
 }
 
-// listInterfaces
 func listInterfaces(pkg *packages.Package, path string, visited map[string]struct{}) ([]string, error) {
 	if _, ok := visited[path]; ok {
 		return []string{}, nil
 	}
-	visited[path] = struct{}{}
 	ifaces := []string{}
-	for _, n := range pkg.Types.Scope().Names() {
-		obj := pkg.Types.Scope().Lookup(n)
-		_, ok := obj.Type().Underlying().(*types.Interface)
-		if !ok {
-			continue
-		}
-		ifaces = append(ifaces, pkg.Types.Path()+"."+n)
+	visited[path] = struct{}{}
+	for _, syn := range pkg.Syntax {
+		ast.Inspect(syn, func(n ast.Node) bool {
+			if _, ok := n.(*ast.File); ok {
+				return true
+			}
+			gendec, ok := n.(*ast.GenDecl)
+			if !ok {
+				return false
+			}
+			for _, spec := range gendec.Specs {
+				ts, ok := spec.(*ast.TypeSpec)
+				if !ok {
+					continue
+				}
+				if _, ok = ts.Type.(*ast.InterfaceType); !ok {
+					continue
+				}
+				ifaces = append(ifaces, path+"."+ts.Name.Name)
+			}
+			return false
+		})
 	}
-	for _, dep := range pkg.Imports {
-		depIfaces, err := listInterfaces(dep, dep.Types.Path(), visited)
+	for path, dep := range pkg.Imports {
+		depIfaces, err := listInterfaces(dep, path, visited)
 		if err != nil {
 			return nil, err
 		}
@@ -162,14 +207,14 @@ func listInterfaces(pkg *packages.Package, path string, visited map[string]struc
 	return ifaces, nil
 }
 
-func loadPackage(path string) (*packages.Package, error) {
+func loadPackage(path string) ([]*packages.Package, error) {
 	var cfg packages.Config
-	cfg.Mode = packages.NeedTypes | packages.NeedImports | packages.NeedDeps
+	cfg.Mode = packages.NeedName | packages.NeedImports | packages.NeedDeps | packages.NeedSyntax
 	pkgs, err := packages.Load(&cfg, path)
 	if err != nil {
 		return nil, fmt.Errorf("error loading packages: %w", err)
 	}
-	return pkgs[0], nil
+	return pkgs, nil
 }
 
 // mightRemoveSelector will replace a selector such as *models.User to just be *User.
